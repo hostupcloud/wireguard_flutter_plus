@@ -1,3 +1,17 @@
+## 1.0.9
+* **macOS & Darwin Network Architecture**:
+  * Resolved macOS App Sandbox UDP bind failure (`listen udp4 :0: bind: operation not permitted`) by adding incoming network server privileges (`com.apple.security.network.server`), enabling full download and bidirectional network throughput.
+  * Added dynamic endpoint host resolution from `wgQuickConfig` to `protocolConfiguration.serverAddress`, allowing standard cross-platform WireGuard configs (`AllowedIPs = 0.0.0.0/0, ::/0`) without routing loops on macOS.
+  * Fixed macOS `cfprefsd` container detaching error (`Using kCFPreferencesAnyUser with a container is only allowed for System Containers`) by safely guarding `UserDefaults(suiteName:)` on macOS and utilizing direct IPC (`sendProviderMessage`) and standard sandboxed defaults.
+* **Duration Continuity & State Resilience**:
+  * Infallible duration tracking leveraging Apple's native `NEVPNConnection.connectedDate`, ensuring session duration does not reset to `00:00:00` when the Flutter app is reopened or hot-restarted while connected.
+  * Fixed stream cancellation (`onCancel`) erasing session timestamps and emitting reset events while the tunnel is actively running in the background.
+  * Paused background timers on stream cancellation (`onCancel`) to save CPU and battery when no active listener exists.
+* **Packet Tunnel Provider & Documentation**:
+  * Added automatic IPv6 safety filtering in `PacketTunnelProvider` to strip `::/0` from peer allowed IPs when interface is IPv4-only, avoiding route configuration failures.
+  * Integrated unified Apple `os_log` tracing in `PacketTunnelProvider` for real-time debugging via macOS Console or `log stream`.
+  * Updated `ios_setup_readme.md` with comprehensive macOS entitlements, setup guide, troubleshooting steps, and the latest resilient `PacketTunnelProvider` implementation.
+
 ## 1.0.8
 * **macOS/Darwin Concurrency & Traffic Resilience**:
   * Fixed an event channel race condition where canceling the VPN stage subscription (`wgstage`) killed the traffic monitoring timer (`traffic`).

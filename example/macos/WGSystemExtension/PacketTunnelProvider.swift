@@ -426,6 +426,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
                         self.totalUploadBytes = currentUpload
 
                         // Update the stats in shared app group (main thread for UI updates).
+                        #if os(iOS)
                         DispatchQueue.main.async {
                             if let sharedDefaults = UserDefaults(suiteName: "group.com.orbanvpn.wireguard") {
                                 sharedDefaults.set(downloadSpeed, forKey: "downloadSpeed")
@@ -434,6 +435,7 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
                                 sharedDefaults.set(self.totalUploadBytes, forKey: "totalUploadBytes")
                             }
                         }
+                        #endif
 
                     } catch {
                         self.log("Error parsing WireGuard config: \(error)")

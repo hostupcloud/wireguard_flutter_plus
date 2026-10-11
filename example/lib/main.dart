@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:developer';
 
 import 'package:flutter/material.dart';
@@ -45,17 +46,16 @@ class _MyAppState extends State<MyApp> {
   final _config = TextEditingController(
     text: '''
 [Interface]
-PrivateKey = GEin20qgtPLGhcDp6CJW3EKlIKDJo+EU1CAfQN3c5Wk=
+PrivateKey = SC34vnBNgzjQmS9AUhW5roFPFVQG3OOhG81oyAYZNH8=
 Address = 10.0.0.2/32
 DNS = 1.1.1.1, 1.0.0.1
-MTU = 1420
+MTU = 1280
 
-# Peer
+# SecureGate-1
 [Peer]
-PublicKey = jwZL4jcWx+TYRe5eHLidkxKcYGVr19mfJ9QQWCztsGA=
-AllowedIPs = 0.0.0.0/0
-Endpoint = poland.vpnserverhub.com:48874
-
+PublicKey = BNNu+xHcTqH0FaL8kl9+XTt+ubpZXbNUNHpIPFcEEy4=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = canada.vpnserverhub.com:46953
 
  ''',
   );
@@ -84,6 +84,7 @@ Endpoint = poland.vpnserverhub.com:48874
       });
 
       _vpnStatusSubscription = wireguard.vpnStageSnapshot.listen((event) async {
+        log(event.name);
         if (mounted) {
           setState(() {
             vpnState = event.name;
@@ -126,7 +127,8 @@ Endpoint = poland.vpnserverhub.com:48874
       await wireguard.initialize(
         interfaceName: "wgflutter",
         vpnName: "Orban VPN",
-        extensionBundleId: "com.orbanvpn.wireguard.WGExtension",
+        iosAppGroup: "group.com.orbanvpn.wireguard",
+        // extensionBundleId: "com.orbanvpn.wireguard.WGExtension",
       );
     } catch (_) {}
   }
@@ -142,11 +144,13 @@ Endpoint = poland.vpnserverhub.com:48874
   void startVpn() async {
     try {
       await wireguard.startVpn(
-          serverAddress: '144.217.253.149:443',
-          wgQuickConfig: _config.text,
-          providerBundleIdentifier: 'com.orbanvpn.wireguard.WGExtension',
-          includedApps: ['com.android.chrome']);
-    } catch (_) {}
+        serverAddress: 'canada.vpnserverhub.com',
+        wgQuickConfig: _config.text,
+        providerBundleIdentifier: 'com.orbanvpn.wireguard.WGExtension',
+      );
+    } catch (e) {
+      log('startVpn error: $e');
+    }
   }
 
   void disconnect() async {
