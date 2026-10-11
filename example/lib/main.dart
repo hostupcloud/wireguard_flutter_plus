@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:developer';
 
 import 'package:flutter/material.dart';
 import 'package:wireguard_flutter_plus/wireguard_flutter_plus.dart';
@@ -68,6 +68,7 @@ Endpoint = poland.vpnserverhub.com:48874
     Future.delayed(const Duration(milliseconds: 500), () {
       _vpnTraffic = wireguard.trafficSnapshot.listen((data) {
         if (mounted) {
+          log(data.toString());
           setState(() {
             downloadCount =
                 formatSpeed(double.parse(data["downloadSpeed"].toString()));
@@ -102,17 +103,25 @@ Endpoint = poland.vpnserverhub.com:48874
     });
   }
 
+  @override
+  void dispose() {
+    _vpnTraffic?.cancel();
+    _vpnStatusSubscription?.cancel();
+    _config.dispose();
+    super.dispose();
+  }
+
   Future<void> initialize() async {
-    if (Platform.isMacOS) {
-      try {
-        await wireguard
-            .requestMacSystemExtension('com.orbanvpn.wireguard.WGExtension');
-        // The user may need to go to System Settings -> Privacy & Security -> Allow
-      } catch (e) {
-        print('System extension request notice: $e');
-        // If extension is already installed, or in development mode, continue initialization
-      }
-    }
+    // if (Platform.isMacOS) {
+    //   try {
+    //     await wireguard
+    //         .requestMacSystemExtension('com.orbanvpn.wireguard.WGExtension');
+    //     // The user may need to go to System Settings -> Privacy & Security -> Allow
+    //   } catch (e) {
+    //     print('System extension request notice: $e');
+    //     // If extension is already installed, or in development mode, continue initialization
+    //   }
+    // }
     try {
       await wireguard.initialize(
         interfaceName: "wgflutter",
@@ -200,6 +209,7 @@ Endpoint = poland.vpnserverhub.com:48874
                 uploadSpeed: uploadCount,
                 totalDownload: totalDownload,
                 totalUpload: totalUpload,
+                duration: duration,
               ),
               const SizedBox(height: 40),
               ConfigInputWidget(controller: _config),

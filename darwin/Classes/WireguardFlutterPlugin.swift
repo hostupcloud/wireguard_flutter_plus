@@ -106,6 +106,7 @@ public class WireguardFlutterPlugin: NSObject, FlutterPlugin {
         WireguardFlutterPlugin.utils.configureVPN(serverAddress: serverAddress, wgQuickConfig: wgQuickConfig, providerBundleIdentifier: providerBundleIdentifier) { success in
             if success {
                 TrafficStreamHandler.shared.resetSession()
+                TrafficStreamHandler.shared.startMonitoring()
             }
             result(success)
         }
@@ -127,6 +128,7 @@ class TrafficStreamHandler: NSObject, FlutterStreamHandler {
     private var lastDownload: Int64 = 0
     private var lastUpload: Int64 = 0
     private var isFirstTickAfterResume: Bool = true
+    private var sessionStartDate: Date?
     private var groupId: String?
 
     private var defaults: UserDefaults {
@@ -146,7 +148,23 @@ class TrafficStreamHandler: NSObject, FlutterStreamHandler {
         queue.async {
             self.eventSink = events
             self.isFirstTickAfterResume = true
-            self.startMonitoringInternal()
+            
+            let isConnected = WireguardFlutterPlugin.utils.currentStatus() == "connected"
+            if isConnected {
+                self.startMonitoringInternal()
+            } else {
+                self.stopTimerInternal()
+                let idleTraffic: [String: Any] = [
+                    "downloadSpeed": 0,
+                    "uploadSpeed": 0,
+                    "totalDownload": 0,
+                    "totalUpload": 0,
+                    "duration": "00:00:00"
+                ]
+                DispatchQueue.main.async { [weak self] in
+                    self?.eventSink?(idleTraffic)
+                }
+            }
         }
         return nil
     }
@@ -161,11 +179,19 @@ class TrafficStreamHandler: NSObject, FlutterStreamHandler {
 
     func startMonitoring() {
         queue.async {
+            let isConnected = WireguardFlutterPlugin.utils.currentStatus() == "connected"
+            guard isConnected else { return }
             self.startMonitoringInternal()
         }
     }
 
     private func startMonitoringInternal() {
+        let isConnected = WireguardFlutterPlugin.utils.currentStatus() == "connected"
+        guard isConnected else {
+            stopTimerInternal()
+            return
+        }
+
         // Restore last known totals or default to 0
         lastDownload = (defaults.object(forKey: "vpn_last_download") as? Int64) ?? 0
         lastUpload = (defaults.object(forKey: "vpn_last_upload") as? Int64) ?? 0
@@ -195,6 +221,12 @@ class TrafficStreamHandler: NSObject, FlutterStreamHandler {
     }
 
     private func tick() {
+        let isConnected = WireguardFlutterPlugin.utils.currentStatus() == "connected"
+        guard isConnected else {
+            self.resetSessionInternal()
+            return
+        }
+
         var currentDownload: Int64 = 0
         var currentUpload: Int64 = 0
         var hasNewStats = false
@@ -259,43 +291,60 @@ class TrafficStreamHandler: NSObject, FlutterStreamHandler {
     }
 
     private func currentFormattedDuration() -> String {
-        if let connectedDate = WireguardFlutterPlugin.utils.providerManager?.connection.connectedDate {
-            let elapsed = max(0, Int(Date().timeIntervalSince(connectedDate)))
-            return formatDuration(TimeInterval(elapsed))
+        let isConnected = WireguardFlutterPlugin.utils.currentStatus() == "connected"
+        guard isConnected else {
+            return "00:00:00"
         }
 
-        var sessionStart: Double = Date().timeIntervalSince1970
-        if let saved = defaults.object(forKey: "vpn_session_start_time") as? Double, saved > 0 {
-            sessionStart = saved
-        } else {
-            defaults.set(sessionStart, forKey: "vpn_session_start_time")
+        if sessionStartDate == nil {
+            if let connectedDate = WireguardFlutterPlugin.utils.providerManager?.connection.connectedDate {
+                sessionStartDate = connectedDate
+            } else if let saved = (defaults.object(forKey: "vpn_session_start_time") as? NSNumber)?.doubleValue, saved > 0 {
+                sessionStartDate = Date(timeIntervalSince1970: saved)
+            } else if let vpnStart = WireguardFlutterPlugin.utils.vpnStartTime {
+                sessionStartDate = vpnStart
+            } else {
+                sessionStartDate = Date()
+            }
+
+            if let start = sessionStartDate {
+                defaults.set(start.timeIntervalSince1970, forKey: "vpn_session_start_time")
+                defaults.synchronize()
+            }
         }
 
-        let elapsedSeconds = max(0, Int(Date().timeIntervalSince1970 - sessionStart))
+        let elapsedSeconds = max(0, Int(Date().timeIntervalSince(sessionStartDate ?? Date())))
         return formatDuration(TimeInterval(elapsedSeconds))
     }
 
     func resetSession() {
         queue.async {
-            self.stopTimerInternal()
-            self.lastDownload = 0
-            self.lastUpload = 0
-            self.isFirstTickAfterResume = true
+            self.resetSessionInternal()
+        }
+    }
 
-            self.defaults.removeObject(forKey: "vpn_session_start_time")
-            self.defaults.removeObject(forKey: "vpn_last_download")
-            self.defaults.removeObject(forKey: "vpn_last_upload")
+    private func resetSessionInternal() {
+        self.stopTimerInternal()
+        self.lastDownload = 0
+        self.lastUpload = 0
+        self.isFirstTickAfterResume = true
+        self.sessionStartDate = nil
+        WireguardFlutterPlugin.utils.vpnStartTime = nil
 
-            DispatchQueue.main.async { [weak self] in
-                let resetTraffic: [String: Any] = [
-                    "downloadSpeed": 0,
-                    "uploadSpeed": 0,
-                    "totalDownload": 0,
-                    "totalUpload": 0,
-                    "duration": "00:00:00"
-                ]
-                self?.eventSink?(resetTraffic)
-            }
+        self.defaults.removeObject(forKey: "vpn_session_start_time")
+        self.defaults.removeObject(forKey: "vpn_last_download")
+        self.defaults.removeObject(forKey: "vpn_last_upload")
+        self.defaults.synchronize()
+
+        DispatchQueue.main.async { [weak self] in
+            let resetTraffic: [String: Any] = [
+                "downloadSpeed": 0,
+                "uploadSpeed": 0,
+                "totalDownload": 0,
+                "totalUpload": 0,
+                "duration": "00:00:00"
+            ]
+            self?.eventSink?(resetTraffic)
         }
     }
 
@@ -347,6 +396,8 @@ class VPNConnectionHandler: NSObject, FlutterStreamHandler {
         events(current)
         if current == "connected" {
             TrafficStreamHandler.shared.startMonitoring()
+        } else {
+            TrafficStreamHandler.shared.resetSession()
         }
 
         // Asynchronously warm up the provider manager if not yet loaded
@@ -358,6 +409,8 @@ class VPNConnectionHandler: NSObject, FlutterStreamHandler {
                     connection(updated)
                     if updated == "connected" {
                         TrafficStreamHandler.shared.startMonitoring()
+                    } else {
+                        TrafficStreamHandler.shared.resetSession()
                     }
                 }
             }
@@ -387,7 +440,7 @@ class VPNUtils {
     private var lastDownloadBytes: Int64 = 0
     private var lastUploadBytes: Int64 = 0
     private var lastUpdateTime: Date?
-    private var vpnStartTime: Date?
+    var vpnStartTime: Date?
 
     func loadProviderManager(completion: @escaping (_ error: Error?) -> Void) {
         NETunnelProviderManager.loadAllFromPreferences { (managers, error) in
