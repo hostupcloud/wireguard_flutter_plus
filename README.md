@@ -6,12 +6,9 @@
 <br/>
 
 <a href="https://vpnserverhub.com" target="_blank">
-    <img src="https://vpnserverhub.com/manual_storage/gallery/1773653784_Screenshot 2026-03-16 at 3.04.49 PM.png" alt="VPN Server Hub" />
+    <img src="https://vpnserverhub.com/manual_storage/gallery/1778155695_Screenshot 2026-03-16 at 3.04.49 PM.png" alt="VPN Server Hub" />
 </a>
 
-<a href="https://vpnserverhub.com" target="_blank">
-    <img src="https://vpnserverhub.com/manual_storage/gallery/1773655278_Screenshot%202026-03-16%20at%203.30.27%E2%80%AFPM.png" alt="VPN Server Hub" />
-</a>
 
 <br/>
 
