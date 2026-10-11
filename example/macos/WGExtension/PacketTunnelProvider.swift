@@ -368,12 +368,6 @@ public class PacketTunnelProvider: NEPacketTunnelProvider {
                 self.log("Failed to stop WireGuard adapter: \(error.localizedDescription)")
             }
             completionHandler()
-
-            #if os(macOS)
-            if Bundle.main.bundleURL.pathExtension != "systemextension" {
-             exit(0) // Only exit if it's a standard App Extension
-            }
-            #endif
         }
     }
 
@@ -460,6 +454,10 @@ public override func handleAppMessage(_ messageData: Data, completionHandler: ((
     if message == "getStats" {
         if let stats = getTrafficStats() {
             let dict: [String: UInt64] = ["rx": stats.rx, "tx": stats.tx]
+            let data = try? JSONSerialization.data(withJSONObject: dict, options: [])
+            completionHandler?(data)
+        } else if self.totalDownloadBytes > 0 || self.totalUploadBytes > 0 {
+            let dict: [String: UInt64] = ["rx": UInt64(max(0, self.totalDownloadBytes)), "tx": UInt64(max(0, self.totalUploadBytes))]
             let data = try? JSONSerialization.data(withJSONObject: dict, options: [])
             completionHandler?(data)
         } else {

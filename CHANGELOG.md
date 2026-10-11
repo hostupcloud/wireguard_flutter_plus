@@ -1,3 +1,16 @@
+## 1.0.8
+* **macOS/Darwin Concurrency & Traffic Resilience**:
+  * Fixed an event channel race condition where canceling the VPN stage subscription (`wgstage`) killed the traffic monitoring timer (`traffic`).
+  * Thread-safe `TrafficStreamHandler` state synchronization using a dedicated serial dispatch queue.
+  * Infallible duration tracking leveraging Apple `NEVPNConnection.connectedDate` with safe fallback to `UserDefaults` timestamp.
+  * Added initial speed spike filtering (`isFirstTickAfterResume`) so cumulative bytes transferred during app suspension/reconnect are not reported as a 1-second instantaneous burst.
+  * Paused background IPC timer on stream cancellation (`onCancel`) to save CPU and battery when no active listener exists.
+  * Removed main-thread blocking `DispatchSemaphore` in `currentStatus()` to prevent UI freezes, watchdog terminations, and initialization deadlocks.
+  * Dynamic App Group fallback to standard `UserDefaults` when unconfigured to prevent sandboxing container lookup errors.
+* **Extension & Documentation**:
+  * Added fallback in `PacketTunnelProvider.handleAppMessage` to return runtime configuration stats if network interface query returns empty across iOS, macOS, and System Extensions.
+  * Updated `ios_setup_readme.md` with the latest resilient packet tunnel implementation.
+
 ## 1.0.7
 * Fixed iOS native code returning 0 for traffic stats on very first VPN connection.
 * Fixed Dart layer mapping `VpnStage.denied` to `VpnStage.disconnected`.

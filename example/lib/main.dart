@@ -105,19 +105,19 @@ Endpoint = poland.vpnserverhub.com:48874
   Future<void> initialize() async {
     if (Platform.isMacOS) {
       try {
-        await wireguard.requestMacSystemExtension(
-            'com.orbanvpn.wireguard.WGSystemExtension');
+        await wireguard
+            .requestMacSystemExtension('com.orbanvpn.wireguard.WGExtension');
         // The user may need to go to System Settings -> Privacy & Security -> Allow
       } catch (e) {
-        print('Failed to install system extension: $e');
-        return;
+        print('System extension request notice: $e');
+        // If extension is already installed, or in development mode, continue initialization
       }
     }
     try {
       await wireguard.initialize(
         interfaceName: "wgflutter",
         vpnName: "Orban VPN",
-        extensionBundleId: "com.orbanvpn.wireguard.WGSystemExtension",
+        extensionBundleId: "com.orbanvpn.wireguard.WGExtension",
       );
     } catch (_) {}
   }
@@ -135,7 +135,7 @@ Endpoint = poland.vpnserverhub.com:48874
       await wireguard.startVpn(
           serverAddress: '144.217.253.149:443',
           wgQuickConfig: _config.text,
-          providerBundleIdentifier: 'com.orbanvpn.wireguard.WGSystemExtension',
+          providerBundleIdentifier: 'com.orbanvpn.wireguard.WGExtension',
           includedApps: ['com.android.chrome']);
     } catch (_) {}
   }
