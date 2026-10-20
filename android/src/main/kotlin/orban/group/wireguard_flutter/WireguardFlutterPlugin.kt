@@ -562,6 +562,20 @@ private fun disconnect(result: Result) {
                     config
                 )
                 Log.i(TAG, "backend.setState() call completed")
+                // GoBackend only brings DOWN the exact Tunnel object it brought UP. If our handle is stale (process
+                // re-attach, earlier failure), the call above is a silent no-op: verify and force it.
+                if (backend.runningTunnelNames.contains(activeTunnelName)) {
+                    Log.w(TAG, "Tunnel still running after DOWN (stale handle) - forcing UP/DOWN with the current config")
+                    try {
+                        val fresh = WireGuardTunnel(activeTunnelName) { st -> scope.launch(Dispatchers.Main) { updateStageFromState(st) } }
+                        tunnel = fresh
+                        backend.setState(fresh, Tunnel.State.UP, config)   // re-registers currentTunnel = fresh
+                        backend.setState(fresh, Tunnel.State.DOWN, null)
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "Forced DOWN failed: ${e.message}", e)
+                    }
+                    if (backend.runningTunnelNames.contains(activeTunnelName)) throw Exception("Tunnel could not be stopped")
+                }
                 
                 Log.i(TAG, "Tunnel $activeTunnelName disconnected")
                 
