@@ -327,7 +327,18 @@ if (!savedTunnelName.isNullOrEmpty() && !savedConfigString.isNullOrEmpty()) {
                 disconnect(result)
             }
             "stage" -> {
-                result.success(getStatus())
+                // Ask the backend (truth survives process restarts); fall back to the cached stage while it initialises.
+                val b = backend
+                if (b != null && ::tunnelName.isInitialized) {
+                    scope.launch(Dispatchers.IO) {
+                        val up = try { b.runningTunnelNames.contains(tunnelName) } catch (e: Throwable) { false }
+                        val s = if (up) "connected" else if (state == "connecting" || state == "prepare" || state == "disconnecting") state else "disconnected"
+                        state = s
+                        withContext(Dispatchers.Main) { result.success(s) }
+                    }
+                } else {
+                    result.success(getStatus())
+                }
             }
             "checkPermission" -> {
                 checkPermission()
@@ -399,19 +410,31 @@ private fun connect(wgQuickConfig: String, result: Result) {
                 // But only if we have a valid tunnel object (not after a disconnect where we nullified it)
                 val backend = futureBackend.await()
                 val runningTunnels = backend.runningTunnelNames
-                if (runningTunnels.contains(tunnelName) && tunnel != null && config != null) {
-                    Log.i(TAG, "Tunnel $tunnelName is already UP, skipping connect")
-                    withContext(Dispatchers.Main) {
-                        flutterSuccess(result, "")
-                    }
-                    return@launch
-                }
-                
-                updateStage("prepare")
 
                 val inputStream = ByteArrayInputStream(wgQuickConfig.toByteArray())
                 val parsedConfig = com.wireguard.config.Config.parse(inputStream)
                     ?: throw Exception("Failed to parse WireGuard config")
+
+                if (runningTunnels.contains(tunnelName)) {
+                    val sameConfig = config != null && config.toString() == parsedConfig.toString()
+                    if (sameConfig) {
+                        // Identical config already up (e.g. the app was reopened while the service kept the tunnel): adopt it.
+                        Log.i(TAG, "Tunnel $tunnelName is already UP with the same config, adopting")
+                        config = parsedConfig
+                        startForegroundService()
+                        startTrafficMonitor()
+                        updateStage("connected")
+                        withContext(Dispatchers.Main) { flutterSuccess(result, "") }
+                        return@launch
+                    }
+                    // Different config (new peer/keys): the old tunnel MUST go down first or the new keys never apply.
+                    Log.i(TAG, "Tunnel $tunnelName is UP with a different config, restarting it")
+                    updateStage("disconnecting")
+                    backend.setState(tunnel(tunnelName), Tunnel.State.DOWN, null)
+                    tunnel = null
+                }
+
+                updateStage("prepare")
 
                 updateStage("connecting")
 
@@ -425,6 +448,7 @@ private fun connect(wgQuickConfig: String, result: Result) {
                     Tunnel.State.UP,
                     parsedConfig
                 )
+                config = parsedConfig
 
                 withContext(Dispatchers.IO) {
                     //saveLastUsedConfig(tunnelName, parsedConfig)
@@ -840,6 +864,11 @@ private fun disconnect(result: Result) {
         channel.setMethodCallHandler(null)
         events.setStreamHandler(null)
         trafficEvents.setStreamHandler(null)
+        // The tunnel keeps running in the foreground service; only the Dart side is gone.
+        // Drop the sinks so nothing is sent to a detached engine; a new engine re-registers via onListen.
+        vpnStageSink = null
+        trafficSink = null
+        stopTrafficMonitor()
         isVpnChecked = false
     }
 
