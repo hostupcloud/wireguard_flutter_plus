@@ -707,14 +707,11 @@ private fun disconnect(result: Result) {
         }
     }
 
+    // Non-interactive: only records whether the VPN permission exists. The system prompt is shown by
+    // checkAndRequestVpnPermissionBlocking() when the user actually connects — never at initialize().
     private fun checkPermission() {
-        val intent = GoBackend.VpnService.prepare(this.activity)
-        if (intent != null) {
-            havePermission = false
-            this.activity?.startActivityForResult(intent, PERMISSIONS_REQUEST_CODE)
-        } else {
-            havePermission = true
-        }
+        val intent = try { VpnService.prepare(context) } catch (e: Throwable) { null }
+        havePermission = intent == null
     }
     private fun checkAndRequestVpnPermission(result: MethodChannel.Result) {
         val intent = VpnService.prepare(context)
