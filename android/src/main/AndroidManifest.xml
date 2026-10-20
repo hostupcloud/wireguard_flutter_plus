@@ -2,11 +2,17 @@
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
  <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+ <!-- Android 13+: the foreground notification (with its Disconnect action) is hidden without this runtime permission -->
+ <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application>
         <service
             android:name=".VpnForegroundService"
             android:exported="false" 
             android:foregroundServiceType="connectedDevice" />
+        <!-- Notification "Disconnect" action; explicit PendingIntent only, never exported -->
+        <receiver
+            android:name=".VpnDisconnectReceiver"
+            android:exported="false" />
     </application>
 </manifest>
