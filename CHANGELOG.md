@@ -1,3 +1,10 @@
+## 1.0.10
+* **Android kill switch**:
+  * `setKillSwitch(bool)` / `isKillSwitchEnabled()` persist the setting in the engine. While enabled, a tunnel that goes DOWN without our own stop (OS revoke, stopped from system settings, engine crash) starts `KillSwitchVpnService`: a blocking VPN session (10.255.255.1/32, routes 0.0.0.0/0 + ::/0, black-hole DNS) with a foreground notification "Kill switch active" and a "Turn off kill switch" action.
+  * New `VpnStage.blocked`, emitted on the stage stream and returned by `stage()` while the block is up.
+  * `clearBlock()` releases the block; `startVpn` releases it on its own before the tunnel establishes.
+  * iOS/macOS/Windows/Linux: `killSwitchSupported == false`, all kill switch calls are no-ops.
+
 ## 1.0.9
 * **macOS & Darwin Network Architecture**:
   * Resolved macOS App Sandbox UDP bind failure (`listen udp4 :0: bind: operation not permitted`) by adding incoming network server privileges (`com.apple.security.network.server`), enabling full download and bidirectional network throughput.

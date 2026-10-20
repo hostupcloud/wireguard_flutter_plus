@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/services.dart';
 
 import 'wireguard_flutter_platform_interface.dart';
@@ -95,5 +97,27 @@ class WireGuardFlutterMethodChannel extends WireGuardFlutterInterface {
     } catch (e) {
       return false;
     }
+  }
+
+  @override
+  bool get killSwitchSupported => Platform.isAndroid;
+
+  @override
+  Future<void> setKillSwitch(bool enabled) async {
+    if (!killSwitchSupported) return;
+    await _methodChannel.invokeMethod("setKillSwitch", {"enabled": enabled});
+  }
+
+  @override
+  Future<bool> isKillSwitchEnabled() async {
+    if (!killSwitchSupported) return false;
+    final result = await _methodChannel.invokeMethod("getKillSwitch");
+    return result == true;
+  }
+
+  @override
+  Future<void> clearBlock() async {
+    if (!killSwitchSupported) return;
+    await _methodChannel.invokeMethod("clearBlock");
   }
 }

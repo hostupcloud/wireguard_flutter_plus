@@ -10,7 +10,18 @@
             android:name=".VpnForegroundService"
             android:exported="false" 
             android:foregroundServiceType="connectedDevice" />
-        <!-- Notification "Disconnect" action; explicit PendingIntent only, never exported -->
+        <!-- Kill switch: blocking VPN session while the tunnel is down (KillSwitchVpnService.kt). The system binds it
+             with BIND_VPN_SERVICE; same foreground type as VpnForegroundService. -->
+        <service
+            android:name=".KillSwitchVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="connectedDevice">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+        <!-- Notification "Disconnect" / "Turn off kill switch" actions; explicit PendingIntent only, never exported -->
         <receiver
             android:name=".VpnDisconnectReceiver"
             android:exported="false" />

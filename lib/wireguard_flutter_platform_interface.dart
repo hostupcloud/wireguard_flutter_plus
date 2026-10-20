@@ -43,6 +43,21 @@ abstract class WireGuardFlutterInterface {
   /// Checks if the VPN is currently connected.
   Future<bool> isConnected() =>
       stage().then((stage) => stage == VpnStage.connected);
+
+  /// Whether the kill switch ([setKillSwitch]) exists on this platform. Android only.
+  bool get killSwitchSupported => false;
+
+  /// Android only. When enabled, an unexpected tunnel drop (not our own stop, not the notification's "Disconnect")
+  /// starts a blocking VPN session that black-holes all traffic and reports [VpnStage.blocked] until [clearBlock]
+  /// or a new [startVpn]. Persisted by the engine; a no-op where unsupported.
+  Future<void> setKillSwitch(bool enabled) async {}
+
+  /// Android only. The persisted kill switch setting; false where unsupported.
+  Future<bool> isKillSwitchEnabled() async => false;
+
+  /// Android only. Releases an active kill-switch block (call before reconnecting, or when the user turns the
+  /// kill switch off). [startVpn] releases it on its own as well. A no-op where unsupported.
+  Future<void> clearBlock() async {}
 }
 
 /// Represents the current stage of the VPN connection.
@@ -78,7 +93,11 @@ enum VpnStage {
   denied('denied'),
 
   /// VPN is exiting/terminating.
-  exiting('exiting');
+  exiting('exiting'),
+
+  /// Kill switch engaged: the tunnel dropped and all traffic is blocked until the next [startVpn] / [clearBlock]
+  /// (Android only).
+  blocked('blocked');
 
   final String code;
 

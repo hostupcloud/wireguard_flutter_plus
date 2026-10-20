@@ -56,6 +56,7 @@ import android.app.Service
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
@@ -112,7 +113,17 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     companion object {
         /** Broadcast action of the notification "Disconnect" button (handled by [VpnDisconnectReceiver] in this process). */
         const val ACTION_DISCONNECT = "orban.group.wireguard_flutter.ACTION_DISCONNECT"
+        /** Broadcast action of the kill-switch notification "Turn off kill switch" button. */
+        const val ACTION_KILL_SWITCH_OFF = "orban.group.wireguard_flutter.ACTION_KILL_SWITCH_OFF"
         private const val LOG_TAG = "NVPN"
+        private const val PREF_KILL_SWITCH = "kill_switch"
+        /** How long after our own DOWN request a DOWN callback still counts as expected (it is synchronous in practice). */
+        private const val EXPECTED_DOWN_WINDOW_MS = 10_000L
+
+        /** Application context, kept so the kill switch can act with no Flutter engine attached. */
+        @Volatile private var appContext: Context? = null
+        /** elapsedRealtime() until which a DOWN callback is ours (stop/restart) and must not trigger the kill switch. */
+        @Volatile private var expectedDownUntil = 0L
 
         private var state: String = "no_connection"
         @Volatile private var sharedBackend: Backend? = null
@@ -125,6 +136,86 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
 
         fun getStatus(): String {
             return state
+        }
+
+        // --- kill switch -------------------------------------------------------------------------------------------
+
+        fun isKillSwitchEnabled(context: Context): Boolean =
+            context.getSharedPreferences("vpn_prefs", Context.MODE_PRIVATE).getBoolean(PREF_KILL_SWITCH, false)
+
+        /** Persists the user's choice. Turning it off also releases an active block. */
+        fun setKillSwitchEnabled(context: Context, enabled: Boolean) {
+            val app = context.applicationContext
+            appContext = app
+            app.getSharedPreferences("vpn_prefs", Context.MODE_PRIVATE).edit().putBoolean(PREF_KILL_SWITCH, enabled).apply()
+            Log.i(LOG_TAG, "Kill switch ${if (enabled) "enabled" else "disabled"}")
+            if (!enabled) clearBlock(app)
+        }
+
+        /** Marks the next DOWN as ours. Call right before any setState(DOWN) issued by this plugin. */
+        internal fun expectDown() {
+            expectedDownUntil = SystemClock.elapsedRealtime() + EXPECTED_DOWN_WINDOW_MS
+        }
+
+        /**
+         * Every engine state change of every [WireGuardTunnel] lands here first. A DOWN that we did not ask for (OS
+         * revoked the VPN, user stopped it in Settings, wireguard-go died) engages the block when the kill switch is on.
+         */
+        internal fun onTunnelState(newState: Tunnel.State) {
+            if (newState == Tunnel.State.UP) {
+                expectedDownUntil = 0L
+                return
+            }
+            if (newState != Tunnel.State.DOWN) return
+            val ctx = appContext ?: return
+            if (SystemClock.elapsedRealtime() < expectedDownUntil) {
+                expectedDownUntil = 0L
+                return
+            }
+            if (!isKillSwitchEnabled(ctx)) return
+            Log.w(LOG_TAG, "Tunnel went DOWN unexpectedly with the kill switch on: blocking all traffic")
+            engageBlock(ctx)
+        }
+
+        /** Starts the blocking session and retires the tunnel's foreground service/notification. */
+        private fun engageBlock(context: Context) {
+            val inst = instance
+            inst?.stopTrafficMonitor()
+            inst?.resetTrafficStats()
+            state = "blocked"
+            // Start the block while the tunnel's foreground service is still alive: the process counts as foreground,
+            // so the foreground start is allowed even with the app UI closed.
+            KillSwitchVpnService.start(context)
+            VpnForegroundService.stop(context)
+            clearStatsFromStorage(context)
+            clearLastUsedConfig(context)
+            sharedTunnel = null
+            inst?.updateStage("blocked")
+        }
+
+        /** Releases the block (before a reconnect, or when the kill switch is turned off). */
+        fun clearBlock(context: Context) {
+            val wasBlocked = KillSwitchVpnService.isRunning || state == "blocked"
+            KillSwitchVpnService.stop(context.applicationContext)
+            if (wasBlocked && state == "blocked") {
+                state = "disconnected"
+                instance?.updateStage("disconnected")
+            }
+        }
+
+        /** The blocking session is established (reported by [KillSwitchVpnService]). */
+        internal fun onBlockEngaged() {
+            state = "blocked"
+            instance?.updateStage("blocked")
+        }
+
+        /** The blocking session ended on its own: revoked by another VPN, or it could not be established. */
+        internal fun onBlockReleased(failed: Boolean) {
+            if (failed) Log.e(LOG_TAG, "Kill switch block could not be established; traffic is NOT blocked")
+            if (state == "blocked") {
+                state = "disconnected"
+                instance?.updateStage("disconnected")
+            }
         }
 
         /**
@@ -212,6 +303,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 }
 
                 Log.i(LOG_TAG, "About to call backend.setState() with Tunnel.State.DOWN")
+                expectDown()
                 backend.setState(t, Tunnel.State.DOWN, config)
                 Log.i(LOG_TAG, "backend.setState() call completed")
                 // GoBackend only brings DOWN the exact Tunnel object it brought UP. If our handle is stale (process
@@ -222,6 +314,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         val fresh = WireGuardTunnel(activeTunnelName, onState)
                         sharedTunnel = fresh
                         backend.setState(fresh, Tunnel.State.UP, config)   // re-registers currentTunnel = fresh
+                        expectDown()
                         backend.setState(fresh, Tunnel.State.DOWN, null)
                     } catch (e: Throwable) {
                         Log.e(LOG_TAG, "Forced DOWN failed: ${e.message}", e)
@@ -241,6 +334,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 try {
                     backend.setState(t, Tunnel.State.UP, config)
                     Thread.sleep(100)
+                    expectDown()
                     backend.setState(t, Tunnel.State.DOWN, config)
                     Log.i(LOG_TAG, "Tunnel brought DOWN - orphaned connection terminated")
                 } catch (e: Exception) {
@@ -248,6 +342,10 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 }
             }
             return false
+        }
+
+        internal fun rememberContext(context: Context) {
+            if (appContext == null) appContext = context.applicationContext
         }
 
         internal fun clearStatsFromStorage(context: Context) {
@@ -297,6 +395,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         events = EventChannel(flutterPluginBinding.binaryMessenger, METHOD_EVENT_NAME)
         trafficEvents = EventChannel(flutterPluginBinding.binaryMessenger, TRAFFIC_EVENT_NAME)
         context = flutterPluginBinding.applicationContext
+        appContext = context
         instance = this
 
         channel.setMethodCallHandler(this)
@@ -399,6 +498,8 @@ if (!savedTunnelName.isNullOrEmpty() && !savedConfigString.isNullOrEmpty()) {
                     Log.e(TAG, "Failed to recreate tunnel object: ${e.message}", e)
                     updateStage("disconnected")
                 }
+            } else if (KillSwitchVpnService.isRunning) {
+                updateStage("blocked")
             } else {
                 updateStage(if (isActive) "connected" else "disconnected")
             }
@@ -486,17 +587,33 @@ if (!savedTunnelName.isNullOrEmpty() && !savedConfigString.isNullOrEmpty()) {
             }
             "stage" -> {
                 // Ask the backend (truth survives process restarts); fall back to the cached stage while it initialises.
+                // A live kill-switch block reports "blocked" whenever no tunnel is up.
                 val b = backend
                 if (b != null && sharedTunnelName != null) {
                     scope.launch(Dispatchers.IO) {
                         val up = try { b.runningTunnelNames.contains(tunnelName) } catch (e: Throwable) { false }
-                        val s = if (up) "connected" else if (state == "connecting" || state == "prepare" || state == "disconnecting") state else "disconnected"
+                        val s = when {
+                            up -> "connected"
+                            KillSwitchVpnService.isRunning || state == "blocked" -> "blocked"
+                            state == "connecting" || state == "prepare" || state == "disconnecting" -> state
+                            else -> "disconnected"
+                        }
                         state = s
                         withContext(Dispatchers.Main) { result.success(s) }
                     }
                 } else {
-                    result.success(getStatus())
+                    result.success(if (KillSwitchVpnService.isRunning) "blocked" else getStatus())
                 }
+            }
+            "setKillSwitch" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                setKillSwitchEnabled(context, enabled)
+                result.success(null)
+            }
+            "getKillSwitch" -> result.success(isKillSwitchEnabled(context))
+            "clearBlock" -> {
+                clearBlock(context)
+                result.success(null)
             }
             "checkPermission" -> {
                 checkPermission()
@@ -546,7 +663,7 @@ if (!savedTunnelName.isNullOrEmpty() && !savedConfigString.isNullOrEmpty()) {
         scope.launch(Dispatchers.Main) {
             when (state) {
                 Tunnel.State.UP -> updateStage("connected")
-                Tunnel.State.DOWN -> updateStage("disconnected")
+                Tunnel.State.DOWN -> updateStage(if (WireguardFlutterPlugin.state == "blocked") "blocked" else "disconnected")
                 else -> updateStage("wait_connection")
             }
         }
@@ -567,6 +684,8 @@ private fun connect(wgQuickConfig: String, result: Result) {
                 // Check if tunnel is already UP to avoid disconnect-then-connect cycle
                 // But only if we have a valid tunnel object (not after a disconnect where we nullified it)
                 val backend = futureBackend.await()
+                // Only one VPN can be active: a kill-switch block must be gone before the tunnel establishes.
+                clearBlock(context)
                 val runningTunnels = backend.runningTunnelNames
 
                 val inputStream = ByteArrayInputStream(wgQuickConfig.toByteArray())
@@ -588,6 +707,7 @@ private fun connect(wgQuickConfig: String, result: Result) {
                     // Different config (new peer/keys): the old tunnel MUST go down first or the new keys never apply.
                     Log.i(TAG, "Tunnel $tunnelName is UP with a different config, restarting it")
                     updateStage("disconnecting")
+                    expectDown()
                     backend.setState(tunnel(tunnelName), Tunnel.State.DOWN, null)
                     tunnel = null
                 }
@@ -749,6 +869,9 @@ private fun disconnect(result: Result) {
                     state = "connected"
                     startTrafficMonitor()
                     updateStage("connected")
+                } else if (KillSwitchVpnService.isRunning) {
+                    state = "blocked"
+                    updateStage("blocked")
                 }
             } catch (e: Throwable) {
                 Log.w(TAG, "initialize: could not check running tunnels: ${e.message}")
@@ -998,6 +1121,8 @@ class WireGuardTunnel(
     override fun getName() = name
 
     override fun onStateChange(newState: Tunnel.State) {
+        // Kill switch first: an unexpected DOWN sets state = "blocked" before the per-call callback maps the stage.
+        WireguardFlutterPlugin.onTunnelState(newState)
         onStateChanged?.invoke(newState)
     }
 }
@@ -1064,6 +1189,7 @@ class VpnForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        WireguardFlutterPlugin.rememberContext(applicationContext)
         vpnDisplayName = getSharedPreferences("vpn_prefs", Context.MODE_PRIVATE).getString(PREF_DISPLAY_NAME, null) ?: vpnDisplayName
         createNotificationChannel()
         promote(buildNotification())
@@ -1148,6 +1274,11 @@ class VpnForegroundService : Service() {
 /** Target of the notification "Disconnect" action. Runs in the plugin process; no Flutter engine required. */
 class VpnDisconnectReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == WireguardFlutterPlugin.ACTION_KILL_SWITCH_OFF) {
+            Log.i("NVPN", "Kill switch turned off from notification")
+            WireguardFlutterPlugin.setKillSwitchEnabled(context.applicationContext, false)
+            return
+        }
         if (intent.action != WireguardFlutterPlugin.ACTION_DISCONNECT) return
         Log.i("NVPN", "Disconnect requested from notification")
         val pending = goAsync()
