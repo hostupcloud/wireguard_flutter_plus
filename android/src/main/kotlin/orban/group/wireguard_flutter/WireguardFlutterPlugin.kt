@@ -79,7 +79,11 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     private var vpnStageSink: EventChannel.EventSink? = null
     private var trafficSink: EventChannel.EventSink? = null
     private val scope = CoroutineScope(Job() + Dispatchers.Main.immediate)
-    private var backend: Backend? = null
+    // Backend/tunnel/config live in the companion: one per PROCESS, not per Flutter engine. A reopened app
+    // (new engine, same process, service still holding the tunnel) must see the running tunnel.
+    private var backend: Backend?
+        get() = sharedBackend
+        set(v) { sharedBackend = v }
     private var havePermission = false
     private var permissionResult: MethodChannel.Result? = null
     private var vpnPermissionContinuation: ((Boolean) -> Unit)? = null
@@ -91,14 +95,24 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     private var connectionStartTime: Long = 0L  // 👈 ADD THIS LINE
     private var activity: Activity? = null
 
-    private lateinit var tunnelName: String
+    private var tunnelName: String
+        get() = sharedTunnelName ?: "wg0"
+        set(v) { sharedTunnelName = v }
     private var vpnDisplayName: String = "WireGuard VPN" // Custom VPN display name
-    private var config: com.wireguard.config.Config? = null
-    private var tunnel: WireGuardTunnel? = null
+    private var config: com.wireguard.config.Config?
+        get() = sharedConfig
+        set(v) { sharedConfig = v }
+    private var tunnel: WireGuardTunnel?
+        get() = sharedTunnel
+        set(v) { sharedTunnel = v }
     private val TAG = "NVPN"
     var isVpnChecked = false
     companion object {
         private var state: String = "no_connection"
+        @Volatile private var sharedBackend: Backend? = null
+        @Volatile private var sharedTunnel: WireGuardTunnel? = null
+        @Volatile private var sharedConfig: com.wireguard.config.Config? = null
+        @Volatile private var sharedTunnelName: String? = null
 
         fun getStatus(): String {
             return state
@@ -259,7 +273,7 @@ if (!savedTunnelName.isNullOrEmpty() && !savedConfigString.isNullOrEmpty()) {
 
     private fun createBackend(): Backend {
         if (backend == null) {
-            backend = GoBackend(context)
+            backend = GoBackend(context.applicationContext)
         }
         return backend as Backend
     }
@@ -329,7 +343,7 @@ if (!savedTunnelName.isNullOrEmpty() && !savedConfigString.isNullOrEmpty()) {
             "stage" -> {
                 // Ask the backend (truth survives process restarts); fall back to the cached stage while it initialises.
                 val b = backend
-                if (b != null && ::tunnelName.isInitialized) {
+                if (b != null && sharedTunnelName != null) {
                     scope.launch(Dispatchers.IO) {
                         val up = try { b.runningTunnelNames.contains(tunnelName) } catch (e: Throwable) { false }
                         val s = if (up) "connected" else if (state == "connecting" || state == "prepare" || state == "disconnecting") state else "disconnected"
