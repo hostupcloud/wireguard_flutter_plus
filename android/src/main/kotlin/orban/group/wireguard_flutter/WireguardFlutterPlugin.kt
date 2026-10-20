@@ -673,6 +673,22 @@ private fun disconnect(result: Result) {
             vpnDisplayName = vpnName // Store the custom VPN name
 
             checkPermission()
+            // If the tunnel is already running (app reopened while the foreground service kept it up), adopt it now so
+            // stage() answers "connected" immediately and traffic stats resume for the new engine.
+            try {
+                val b = futureBackend.await()
+                if (b.runningTunnelNames.contains(tunnelName)) {
+                    if (config == null) {
+                        val prefs = context.getSharedPreferences("vpn_prefs", Context.MODE_PRIVATE)
+                        prefs.getString("last_used_config", null)?.let { config = com.wireguard.config.Config.parse(it.byteInputStream()) }
+                    }
+                    state = "connected"
+                    startTrafficMonitor()
+                    updateStage("connected")
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "initialize: could not check running tunnels: ${e.message}")
+            }
             result.success(null)
         }
     }
