@@ -374,21 +374,32 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         return false
     }
 
-    override fun onAttachedToActivity(activityPluginBinding: ActivityPluginBinding) {
-        this.activity = activityPluginBinding.activity as FlutterActivity
+    private var activityBinding: ActivityPluginBinding? = null
+
+    // The VPN consent dialog result arrives through the ActivityPluginBinding; without registering the
+    // listener, onActivityResult never fires and the first "start" after consent waits forever.
+    private fun attachActivity(binding: ActivityPluginBinding) {
+        activityBinding?.removeActivityResultListener(this)
+        activityBinding = binding
+        activity = binding.activity as FlutterActivity
+        binding.addActivityResultListener(this)
     }
 
-    override fun onDetachedFromActivityForConfigChanges() {
-        this.activity = null
+    private fun detachActivity() {
+        activityBinding?.removeActivityResultListener(this)
+        activityBinding = null
+        activity = null
+        // A consent prompt that is still open when the activity goes away can never answer: fail the pending start.
+        vpnPermissionContinuation?.let { cb -> vpnPermissionContinuation = null; cb(false) }
     }
 
-    override fun onReattachedToActivityForConfigChanges(activityPluginBinding: ActivityPluginBinding) {
-        this.activity = activityPluginBinding.activity as FlutterActivity
-    }
+    override fun onAttachedToActivity(activityPluginBinding: ActivityPluginBinding) = attachActivity(activityPluginBinding)
 
-    override fun onDetachedFromActivity() {
-        this.activity = null
-    }
+    override fun onDetachedFromActivityForConfigChanges() = detachActivity()
+
+    override fun onReattachedToActivityForConfigChanges(activityPluginBinding: ActivityPluginBinding) = attachActivity(activityPluginBinding)
+
+    override fun onDetachedFromActivity() = detachActivity()
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, METHOD_CHANNEL_NAME)
@@ -907,8 +918,10 @@ private fun disconnect(result: Result) {
     fun checkAndRequestVpnPermissionBlocking(callback: (Boolean) -> Unit) {
      val intent = VpnService.prepare(context)
       if (intent != null) {
+        val act = activity
+        if (act == null) { callback(false); return }
         vpnPermissionContinuation = callback
-        activity?.startActivityForResult(intent, PERMISSIONS_REQUEST_CODE)
+        try { act.startActivityForResult(intent, PERMISSIONS_REQUEST_CODE) } catch (e: Throwable) { vpnPermissionContinuation = null; callback(false) }
       } else {
         // Already granted
         havePermission = true
