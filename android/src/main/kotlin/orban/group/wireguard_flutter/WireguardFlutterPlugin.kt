@@ -789,7 +789,7 @@ private fun disconnect(result: Result) {
     }
 
   private fun startTrafficMonitor() {
-    if (!this::tunnelName.isInitialized) {
+    if (sharedTunnelName == null) {
         Log.e("NVPN", "Tunnel name has not been initialized!")
         return
     }
