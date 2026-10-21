@@ -1,3 +1,8 @@
+## 1.0.13
+
+* Android: the plugin now tracks every attached Flutter engine in the process (the app UI engine plus any headless engine a host app starts, e.g. for background auto-connect) and broadcasts engine-raised stage changes (kill-switch block/release, notification disconnect) to all of them. Previously a second engine attaching and detaching dropped the UI engine's reference, so it stopped receiving those events.
+* Android: `WireguardFlutterPlugin.tunnelStatus()` (companion, no engine needed) reports `connected` / `blocked` / `connecting` / `disconnecting` / `disconnected` for native callers such as a host app's foreground service.
+
 ## 1.0.12
 
 * Android: `startVpn` always brings UP a fresh tunnel handle carrying the call's state callback. Previously a cached handle created without a callback (the traffic monitor polls `getStatistics(tunnel(name))`, and a kill-switch block counts as an active VPN) was reused, so the UP event never reached Dart and reconnecting from the kill-switch block appeared to hang.

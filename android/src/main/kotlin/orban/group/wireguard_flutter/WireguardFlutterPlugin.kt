@@ -130,8 +130,30 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         @Volatile private var sharedTunnel: WireGuardTunnel? = null
         @Volatile private var sharedConfig: com.wireguard.config.Config? = null
         @Volatile private var sharedTunnelName: String? = null
-        /** The plugin attached to the live Flutter engine, or null while the app UI is closed (service keeps the tunnel). */
-        @Volatile private var instance: WireguardFlutterPlugin? = null
+        /**
+         * Every plugin instance attached to a live Flutter engine in this process (the app UI engine, and any headless
+         * engine the host app starts, e.g. for background auto-connect). Empty while no engine is running (the service
+         * keeps the tunnel). Stage changes raised outside a method call are broadcast to all of them.
+         */
+        private val instances = java.util.concurrent.CopyOnWriteArrayList<WireguardFlutterPlugin>()
+        private fun broadcastStage(stage: String) { for (i in instances) i.updateStage(stage) }
+        private fun broadcastStageFromState(state: Tunnel.State) { for (i in instances) i.updateStageFromState(state) }
+
+        /**
+         * Process-wide tunnel status for native callers that have no Flutter engine (a host app's background service):
+         * "connected" (a tunnel is UP in the backend), "blocked" (kill-switch session), "connecting" / "disconnecting"
+         * (a Dart call is in flight), else "disconnected". Cheap; safe from any thread.
+         */
+        fun tunnelStatus(): String {
+            val up = try { sharedBackend?.runningTunnelNames?.isNotEmpty() == true } catch (_: Throwable) { false }
+            return when {
+                up -> "connected"
+                KillSwitchVpnService.isRunning || state == "blocked" -> "blocked"
+                state == "connecting" || state == "prepare" -> "connecting"
+                state == "disconnecting" -> "disconnecting"
+                else -> "disconnected"
+            }
+        }
         private val processScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
         fun getStatus(): String {
@@ -179,9 +201,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
 
         /** Starts the blocking session and retires the tunnel's foreground service/notification. */
         private fun engageBlock(context: Context) {
-            val inst = instance
-            inst?.stopTrafficMonitor()
-            inst?.resetTrafficStats()
+            for (i in instances) { i.stopTrafficMonitor(); i.resetTrafficStats() }
             state = "blocked"
             // Start the block while the tunnel's foreground service is still alive: the process counts as foreground,
             // so the foreground start is allowed even with the app UI closed.
@@ -190,7 +210,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             clearStatsFromStorage(context)
             clearLastUsedConfig(context)
             sharedTunnel = null
-            inst?.updateStage("blocked")
+            broadcastStage("blocked")
         }
 
         /** Releases the block (before a reconnect, or when the kill switch is turned off). */
@@ -199,14 +219,14 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             KillSwitchVpnService.stop(context.applicationContext)
             if (wasBlocked && state == "blocked") {
                 state = "disconnected"
-                instance?.updateStage("disconnected")
+                broadcastStage("disconnected")
             }
         }
 
         /** The blocking session is established (reported by [KillSwitchVpnService]). */
         internal fun onBlockEngaged() {
             state = "blocked"
-            instance?.updateStage("blocked")
+            broadcastStage("blocked")
         }
 
         /** The blocking session ended on its own: revoked by another VPN, or it could not be established. */
@@ -214,7 +234,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             if (failed) Log.e(LOG_TAG, "Kill switch block could not be established; traffic is NOT blocked")
             if (state == "blocked") {
                 state = "disconnected"
-                instance?.updateStage("disconnected")
+                broadcastStage("disconnected")
             }
         }
 
@@ -226,18 +246,16 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         fun disconnectFromNotification(context: Context, onDone: () -> Unit = {}) {
             val app = context.applicationContext
             processScope.launch {
-                val inst = instance
                 var stillUp = false
                 try {
-                    inst?.stopTrafficMonitor()
-                    inst?.resetTrafficStats()
+                    for (i in instances) { i.stopTrafficMonitor(); i.resetTrafficStats() }
                     state = "disconnecting"
-                    inst?.updateStage("disconnecting")
+                    broadcastStage("disconnecting")
                     val backend = sharedBackend
                     if (backend == null) {
                         Log.w(LOG_TAG, "Notification disconnect: no backend in this process, nothing to bring down")
                     } else {
-                        tearDownTunnel(app, backend) { st -> instance?.updateStageFromState(st) }
+                        tearDownTunnel(app, backend) { st -> broadcastStageFromState(st) }
                     }
                 } catch (e: Throwable) {
                     Log.e(LOG_TAG, "Notification disconnect failed: ${e.message}", e)
@@ -246,7 +264,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 if (stillUp) {
                     // Tunnel survived: keep the service/notification, tell Dart the truth.
                     state = "connected"
-                    instance?.updateStage("connected")
+                    broadcastStage("connected")
                     onDone()
                     return@launch
                 }
@@ -256,7 +274,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 sharedTunnel = null
                 sharedConfig = null
                 state = "disconnected"
-                instance?.updateStage("disconnected")
+                broadcastStage("disconnected")
                 Log.i(LOG_TAG, "Disconnected from notification")
                 onDone()
             }
@@ -407,7 +425,7 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         trafficEvents = EventChannel(flutterPluginBinding.binaryMessenger, TRAFFIC_EVENT_NAME)
         context = flutterPluginBinding.applicationContext
         appContext = context
-        instance = this
+        instances.add(this)
 
         channel.setMethodCallHandler(this)
         events.setStreamHandler(object : EventChannel.StreamHandler {
@@ -1080,7 +1098,7 @@ private fun disconnect(result: Result) {
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        if (instance === this) instance = null
+        instances.remove(this)
         channel.setMethodCallHandler(null)
         events.setStreamHandler(null)
         trafficEvents.setStreamHandler(null)
