@@ -427,7 +427,8 @@ class WireguardFlutterPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
            trafficSink = events
 
             scope.launch(Dispatchers.IO) {
-              val isActive = isVpnActive()
+              // A kill-switch block is a VPN too: no tunnel, nothing to count.
+              val isActive = isVpnActive() && !KillSwitchVpnService.isRunning
               Log.i(TAG, "VPN active on trafficEvent listen: $isActive")
               if (isActive) {
                 startTrafficMonitor()
@@ -727,6 +728,11 @@ private fun connect(wgQuickConfig: String, result: Result) {
 
                 updateStage("connecting")
 
+                // Always bring UP a fresh handle carrying THIS call's callback. tunnel() reuses a cached object and
+                // ignores the callback argument, and the cached one may have been created without a callback (the
+                // traffic monitor's getStatistics(tunnel(name)) while a kill-switch block kept isVpnActive() true):
+                // the UP/DOWN state changes would then never reach Dart and the app would wait forever.
+                tunnel = null
                 backend.setState(
                     tunnel(tunnelName) { state ->
                         scope.launch(Dispatchers.Main) {

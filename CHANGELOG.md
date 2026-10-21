@@ -1,3 +1,8 @@
+## 1.0.12
+
+* Android: `startVpn` always brings UP a fresh tunnel handle carrying the call's state callback. Previously a cached handle created without a callback (the traffic monitor polls `getStatistics(tunnel(name))`, and a kill-switch block counts as an active VPN) was reused, so the UP event never reached Dart and reconnecting from the kill-switch block appeared to hang.
+* Android: the traffic monitor is not started while the kill-switch block is up (there is no tunnel to read).
+
 ## 1.0.11
 
 * Android: register the activity-result listener so the VPN consent dialog's answer reaches the plugin; the first connect on a fresh install no longer hangs after the user taps OK. A pending consent is failed (not left hanging) when the activity detaches.
