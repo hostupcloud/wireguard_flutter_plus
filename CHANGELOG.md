@@ -1,3 +1,9 @@
+## 1.0.14
+
+* Linux: the wg-quick config (holds the private key) is written with mode 0600 instead of the default umask and is removed once the tunnel is down; a failed `wg-quick up` cleans it up too.
+* Linux: traffic stats work — `wg show <iface> transfer` is parsed (the old `wg show all dump` parser indexed columns that do not exist and threw every 2 s) and the stream emits the same map as Android (`totalDownload`/`totalUpload` KiB, `downloadSpeed`/`uploadSpeed` KiB/s, `duration` HH:MM:SS).
+* Linux: `stopVpn` no longer asserts on an already-down tunnel; `isConnected` uses `wg show interfaces`; `checkVpnPermission` reports whether `sudo -n wg` works.
+
 ## 1.0.13
 
 * Android: the plugin now tracks every attached Flutter engine in the process (the app UI engine plus any headless engine a host app starts, e.g. for background auto-connect) and broadcasts engine-raised stage changes (kill-switch block/release, notification disconnect) to all of them. Previously a second engine attaching and detaching dropped the UI engine's reference, so it stopped receiving those events.
